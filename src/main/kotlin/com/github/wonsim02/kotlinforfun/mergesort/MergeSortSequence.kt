@@ -4,37 +4,35 @@ import mu.KotlinLogging
 
 sealed class MergeSortSequence<T : Comparable<T>> : Sequence<T> {
 
+    abstract val context: MergeSortContext<T>
     abstract val range: Pair<Int, Int>
 
-    abstract fun sortedIterator(): Iterator<T>
-    final override fun iterator(): Iterator<T> = sortedIterator()
+    protected abstract fun sortedIterator(instance: MergeSortContext.Instance<T>): Iterator<T>
+    final override fun iterator(): Iterator<T> = sortedIterator(context.newInstance())
 
     final override fun toString(): String {
         return "MergeSortSequence(range=$range)"
     }
 
     class Singleton<T : Comparable<T>>(
-        val value: T,
-        index: Int,
+        override val context: MergeSortContext<T>,
+        val index: Int,
     ) : MergeSortSequence<T>() {
 
         override val range = index to index + 1
 
-        override fun sortedIterator(): Iterator<T> = object : IteratorWithLogging<T>() {
+        override fun sortedIterator(
+            instance: MergeSortContext.Instance<T>,
+        ): Iterator<T> = object : IteratorWithLogging<T>() {
 
-            private var consumed: Boolean = false
             override val objectName = this@Singleton.toString()
-
-            override fun hasNext(): Boolean = !consumed
-
-            override fun nextWithoutLogging(): T {
-                if (!hasNext()) throw NoSuchElementException()
-                return value.also { consumed = true }
-            }
+            override fun hasNext(): Boolean = !instance.consumed(index)
+            override fun nextWithoutLogging(): T = instance[index]
         }
     }
 
     class Merged<T : Comparable<T>>(
+        override val context: MergeSortContext<T>,
         val left: MergeSortSequence<T>,
         val right: MergeSortSequence<T>,
         from: Int,
@@ -43,10 +41,12 @@ sealed class MergeSortSequence<T : Comparable<T>> : Sequence<T> {
 
         override val range = from to until
 
-        override fun sortedIterator(): Iterator<T> = object : IteratorWithLogging<T>() {
+        override fun sortedIterator(
+            instance: MergeSortContext.Instance<T>,
+        ): Iterator<T> = object : IteratorWithLogging<T>() {
 
-            private val leftIterator: BufferedIterator<T> = BufferedIterator(left.sortedIterator())
-            private val rightIterator: BufferedIterator<T> = BufferedIterator(right.sortedIterator())
+            private val leftIterator: BufferedIterator<T> = BufferedIterator(left.sortedIterator(instance))
+            private val rightIterator: BufferedIterator<T> = BufferedIterator(right.sortedIterator(instance))
             override val objectName = this@Merged.toString()
 
             override fun hasNext(): Boolean = leftIterator.hasNext() || rightIterator.hasNext()
@@ -86,32 +86,32 @@ sealed class MergeSortSequence<T : Comparable<T>> : Sequence<T> {
 
         fun <T : Comparable<T>> toMergeSortSequence(list: List<T>): MergeSortSequence<T>? {
             return recursiveToMergeSortSequence(
-                list = list,
+                context = MergeSortContext(list),
                 fromIndex = 0,
                 untilIndex = list.size,
             )
         }
 
         private fun <T : Comparable<T>> recursiveToMergeSortSequence(
-            list: List<T>,
+            context: MergeSortContext<T>,
             fromIndex: Int,
             untilIndex: Int,
         ): MergeSortSequence<T>? {
             return if (fromIndex >= untilIndex) {
                 null
             } else if (fromIndex == untilIndex - 1) {
-                Singleton(list[fromIndex], fromIndex)
+                Singleton(context, fromIndex)
             } else {
                 val middleIndex = (fromIndex + untilIndex) / 2
-                val leftSequence = recursiveToMergeSortSequence(list, fromIndex, middleIndex)
-                val rightSequence = recursiveToMergeSortSequence(list, middleIndex, untilIndex)
+                val leftSequence = recursiveToMergeSortSequence(context, fromIndex, middleIndex)
+                val rightSequence = recursiveToMergeSortSequence(context, middleIndex, untilIndex)
 
                 if (leftSequence == null) {
                     rightSequence
                 } else if (rightSequence == null) {
                     leftSequence
                 } else {
-                    Merged(leftSequence, rightSequence, fromIndex, untilIndex)
+                    Merged(context, leftSequence, rightSequence, fromIndex, untilIndex)
                 }
             }
         }
